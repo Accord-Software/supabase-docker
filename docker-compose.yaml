@@ -1,13 +1,17 @@
+name: "supabase"
 services:
   studio:
+    container_name: supabase-studio
     image: "supabase/studio:20241014-c083b3b"
     restart: unless-stopped
     healthcheck:
       test:
-        - CMD
-        - node
-        - "-e"
-        - "require('http').get('http://localhost:3000/api/profile', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3000/api/profile', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})",
+        ]
       timeout: 5s
       interval: 5s
       retries: 3
@@ -30,6 +34,7 @@ services:
       NEXT_PUBLIC_ENABLE_LOGS: true
       NEXT_ANALYTICS_BACKEND_PROVIDER: postgres
   kong:
+    container_name: supabase-kong
     image: "kong:2.8.1"
     restart: unless-stopped
     entrypoint: 'bash -c ''eval "echo \"$$(cat ~/temp.yml)\"" > ~/kong.yml && /docker-entrypoint.sh kong docker-start'''
@@ -53,6 +58,7 @@ services:
         target: /home/kong/temp.yml
         content: "_format_version: '2.1'\n_transform: true\n\n###\n### Consumers / Users\n###\nconsumers:\n  - username: DASHBOARD\n  - username: anon\n    keyauth_credentials:\n      - key: $SUPABASE_ANON_KEY\n  - username: service_role\n    keyauth_credentials:\n      - key: $SUPABASE_SERVICE_KEY\n\n###\n### Access Control List\n###\nacls:\n  - consumer: anon\n    group: anon\n  - consumer: service_role\n    group: admin\n\n###\n### Dashboard credentials\n###\nbasicauth_credentials:\n  - consumer: DASHBOARD\n    username: $DASHBOARD_USERNAME\n    password: $DASHBOARD_PASSWORD\n\n###\n### API Routes\n###\nservices:\n  ## Open Auth routes\n  - name: auth-v1-open\n    url: http://auth:9999/verify\n    routes:\n      - name: auth-v1-open\n        strip_path: true\n        paths:\n          - /auth/v1/verify\n    plugins:\n      - name: cors\n  - name: auth-v1-open-callback\n    url: http://auth:9999/callback\n    routes:\n      - name: auth-v1-open-callback\n        strip_path: true\n        paths:\n          - /auth/v1/callback\n    plugins:\n      - name: cors\n  - name: auth-v1-open-authorize\n    url: http://auth:9999/authorize\n    routes:\n      - name: auth-v1-open-authorize\n        strip_path: true\n        paths:\n          - /auth/v1/authorize\n    plugins:\n      - name: cors\n\n  ## Secure Auth routes\n  - name: auth-v1\n    _comment: 'GoTrue: /auth/v1/* -> http://auth:9999/*'\n    url: http://auth:9999/\n    routes:\n      - name: auth-v1-all\n        strip_path: true\n        paths:\n          - /auth/v1/\n    plugins:\n      - name: cors\n      - name: key-auth\n        config:\n          hide_credentials: false\n      - name: acl\n        config:\n          hide_groups_header: true\n          allow:\n            - admin\n            - anon\n\n  ## Secure REST routes\n  - name: rest-v1\n    _comment: 'PostgREST: /rest/v1/* -> http://rest:3000/*'\n    url: http://rest:3000/\n    routes:\n      - name: rest-v1-all\n        strip_path: true\n        paths:\n          - /rest/v1/\n    plugins:\n      - name: cors\n      - name: key-auth\n        config:\n          hide_credentials: true\n      - name: acl\n        config:\n          hide_groups_header: true\n          allow:\n            - admin\n            - anon\n\n  ## Secure GraphQL routes\n  - name: graphql-v1\n    _comment: 'PostgREST: /graphql/v1/* -> http://rest:3000/rpc/graphql'\n    url: http://rest:3000/rpc/graphql\n    routes:\n      - name: graphql-v1-all\n        strip_path: true\n        paths:\n          - /graphql/v1\n    plugins:\n      - name: cors\n      - name: key-auth\n        config:\n          hide_credentials: true\n      - name: request-transformer\n        config:\n          add:\n            headers:\n              - Content-Profile:graphql_public\n      - name: acl\n        config:\n          hide_groups_header: true\n          allow:\n            - admin\n            - anon\n\n  ## Secure Realtime routes\n  - name: realtime-v1-ws\n    _comment: 'Realtime: /realtime/v1/* -> ws://realtime:4000/socket/*'\n    url: http://realtime-dev.supabase-realtime:4000/socket\n    protocol: ws\n    routes:\n      - name: realtime-v1-ws\n        strip_path: true\n        paths:\n          - /realtime/v1/\n    plugins:\n      - name: cors\n      - name: key-auth\n        config:\n          hide_credentials: false\n      - name: acl\n        config:\n          hide_groups_header: true\n          allow:\n            - admin\n            - anon\n  - name: realtime-v1-rest\n    _comment: 'Realtime: /realtime/v1/* -> ws://realtime:4000/socket/*'\n    url: http://realtime-dev.supabase-realtime:4000/api\n    protocol: http\n    routes:\n      - name: realtime-v1-rest\n        strip_path: true\n        paths:\n          - /realtime/v1/api\n    plugins:\n      - name: cors\n      - name: key-auth\n        config:\n          hide_credentials: false\n      - name: acl\n        config:\n          hide_groups_header: true\n          allow:\n            - admin\n            - anon\n  ## Storage routes: the storage server manages its own auth\n  - name: storage-v1\n    _comment: 'Storage: /storage/v1/* -> http://storage:5000/*'\n    url: http://storage:5000/\n    routes:\n      - name: storage-v1-all\n        strip_path: true\n        paths:\n          - /storage/v1/\n    plugins:\n      - name: cors\n\n  ## Edge Functions routes\n  - name: functions-v1\n    _comment: 'Edge Functions: /functions/v1/* -> http://functions:9000/*'\n    url: http://functions:9000/\n    routes:\n      - name: functions-v1-all\n        strip_path: true\n        paths:\n          - /functions/v1/\n    plugins:\n      - name: cors\n\n  ## Analytics routes\n  - name: analytics-v1\n    _comment: 'Analytics: /analytics/v1/* -> http://logflare:4000/*'\n    url: http://analytics:4000/\n    routes:\n      - name: analytics-v1-all\n        strip_path: true\n        paths:\n          - /analytics/v1/\n\n  ## Secure Database routes\n  - name: meta\n    _comment: 'pg-meta: /pg/* -> http://pg-meta:8080/*'\n    url: http://meta:8080/\n    routes:\n      - name: meta-all\n        strip_path: true\n        paths:\n          - /pg/\n    plugins:\n      - name: key-auth\n        config:\n          hide_credentials: false\n      - name: acl\n        config:\n          hide_groups_header: true\n          allow:\n            - admin\n\n  ## Protected Dashboard - catch all remaining routes\n  - name: dashboard\n    _comment: 'Studio: /* -> http://studio:3000/*'\n    url: http://studio:3000/\n    routes:\n      - name: dashboard-all\n        strip_path: true\n        paths:\n          - /\n    plugins:\n      - name: cors\n      - name: basic-auth\n        config:\n          hide_credentials: true\n"
   auth:
+    container_name: supabase-auth
     image: "supabase/gotrue:v2.158.1"
     depends_on:
       db:
@@ -61,12 +67,14 @@ services:
         condition: service_healthy
     healthcheck:
       test:
-        - CMD
-        - wget
-        - "--no-verbose"
-        - "--tries=1"
-        - "--spider"
-        - "http://localhost:9999/health"
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:9999/health",
+        ]
       timeout: 5s
       interval: 5s
       retries: 3
@@ -115,6 +123,7 @@ services:
       GOTRUE_EXTERNAL_APPLE_ENABLED: "${ENABLE_APPLE_SIGNUP:-true}"
       GOTRUE_EXTERNAL_APPLE_CLIENT_ID: "${APPLE_CLIENT_ID}"
   rest:
+    container_name: supabase-rest
     image: "postgrest/postgrest:v12.2.0"
     depends_on:
       db:
@@ -132,6 +141,8 @@ services:
       PGRST_APP_SETTINGS_JWT_EXP: "${JWT_EXPIRY:-3600}"
     command: postgrest
   realtime:
+    # This container name looks inconsistent but is correct because realtime constructs tenant id by parsing the subdomain
+    container_name: realtime-dev.supabase-realtime
     image: "supabase/realtime:v2.30.34"
     depends_on:
       db:
@@ -140,15 +151,17 @@ services:
         condition: service_healthy
     healthcheck:
       test:
-        - CMD
-        - curl
-        - "-sSfL"
-        - "--head"
-        - "-o"
-        - /dev/null
-        - "-H"
-        - "Authorization: Bearer ${ANON_KEY}"
-        - "http://localhost:4000/api/tenants/realtime-dev/health"
+        [
+          "CMD",
+          "curl",
+          "-sSfL",
+          "--head",
+          "-o",
+          "/dev/null",
+          "-H",
+          "Authorization: Bearer ${ANON_KEY}",
+          "http://localhost:4000/api/tenants/realtime-dev/health",
+        ]
       timeout: 5s
       interval: 5s
       retries: 3
@@ -170,6 +183,7 @@ services:
       APP_NAME: realtime
       SEED_SELF_HOST: true
   storage:
+    container_name: supabase-storage
     image: "supabase/storage-api:v1.11.13"
     depends_on:
       db:
@@ -180,12 +194,14 @@ services:
         condition: service_started
     healthcheck:
       test:
-        - CMD
-        - wget
-        - "--no-verbose"
-        - "--tries=1"
-        - "--spider"
-        - "http://localhost:5000/status"
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:5000/status",
+        ]
       timeout: 5s
       interval: 5s
       retries: 3
@@ -207,6 +223,7 @@ services:
     volumes:
       - "./volumes/storage:/var/lib/storage:z"
   imgproxy:
+    container_name: supabase-imgproxy
     image: "darthsim/imgproxy:v3.8.0"
     healthcheck:
       test:
@@ -224,6 +241,7 @@ services:
     volumes:
       - "./volumes/storage:/var/lib/storage:z"
   meta:
+    container_name: supabase-meta
     image: "supabase/postgres-meta:v0.84.2"
     depends_on:
       db:
@@ -239,6 +257,7 @@ services:
       PG_META_DB_USER: supabase_admin
       PG_META_DB_PASSWORD: "${POSTGRES_PASSWORD}"
   functions:
+    container_name: supabase-edge-functions
     image: "supabase/edge-runtime:v1.59.0"
     restart: unless-stopped
     depends_on:
@@ -266,6 +285,7 @@ services:
       - "--main-service"
       - /home/deno/functions/main
   analytics:
+    container_name: supabase-analytics
     image: "supabase/logflare:1.4.0"
     healthcheck:
       test:
@@ -295,6 +315,7 @@ services:
       POSTGRES_BACKEND_SCHEMA: _analytics
       LOGFLARE_FEATURE_FLAG_OVERRIDE: multibackend=true
   db:
+    container_name: supabase-db
     image: "supabase/postgres:15.1.1.78"
     healthcheck:
       test: "pg_isready -U postgres -h localhost"
@@ -353,15 +374,18 @@ services:
         content: "\\set pguser `echo \"$POSTGRES_USER\"`\n\n\\c _supabase\ncreate schema if not exists _supavisor;\nalter schema _supavisor owner to :pguser;\n"
       - "db-config:/etc/postgresql-custom"
   vector:
+    container_name: supabase-vector
     image: "timberio/vector:0.28.1-alpine"
     healthcheck:
       test:
-        - CMD
-        - wget
-        - "--no-verbose"
-        - "--tries=1"
-        - "--spider"
-        - "http://vector:9001/health"
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://vector:9001/health",
+        ]
       timeout: 5s
       interval: 5s
       retries: 3
@@ -377,6 +401,7 @@ services:
       - "--config"
       - etc/vector/vector.yml
   supavisor:
+    container_name: supabase-pooler
     image: "supabase/supavisor:1.1.56"
     healthcheck:
       test: 'curl -sSfL --head -o /dev/null "http://127.0.0.1:4000/api/health"'
@@ -418,5 +443,6 @@ services:
         source: ./volumes/pooler/pooler.exs
         target: /etc/pooler/pooler.exs
         content: "{:ok, _} = Application.ensure_all_started(:supavisor)\n\n{:ok, version} =\n  case Supavisor.Repo.query!(\"select version()\") do\n    %{rows: [[ver]]} -> Supavisor.Helpers.parse_pg_version(ver)\n    _ -> nil\n  end\n\nparams = %{\n  \"external_id\" => System.get_env(\"POOLER_TENANT_ID\"),\n  \"db_host\" => \"db\",\n  \"db_port\" => System.get_env(\"POSTGRES_PORT\"),\n  \"db_database\" => System.get_env(\"POSTGRES_DB\"),\n  \"require_user\" => false,\n  \"auth_query\" => \"SELECT * FROM pgbouncer.get_auth($1)\",\n  \"default_max_clients\" => System.get_env(\"POOLER_MAX_CLIENT_CONN\"),\n  \"default_pool_size\" => System.get_env(\"POOLER_DEFAULT_POOL_SIZE\"),\n  \"default_parameter_status\" => %{\"server_version\" => version},\n  \"users\" => [%{\n    \"db_user\" => \"pgbouncer\",\n    \"db_password\" => System.get_env(\"POSTGRES_PASSWORD\"),\n    \"mode_type\" => System.get_env(\"POOLER_POOL_MODE\"),\n    \"pool_size\" => System.get_env(\"POOLER_DEFAULT_POOL_SIZE\"),\n    \"is_manager\" => true\n  }]\n}\n\nif !Supavisor.Tenants.get_tenant_by_external_id(params[\"external_id\"]) do\n  {:ok, _} = Supavisor.Tenants.create_tenant(params)\nend\n"
+
 volumes:
-  db-config: null
+  db-config:
